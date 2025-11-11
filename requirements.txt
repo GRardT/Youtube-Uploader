@@ -1,0 +1,102 @@
+# =============================================================================
+# YouTube Uploader v2.0 - Python Dependencies
+# =============================================================================
+# Install all dependencies with: pip install -r requirements.txt
+#
+# For development/testing, consider using a virtual environment:
+#   python -m venv venv
+#   venv\Scripts\activate    (Windows)
+#   pip install -r requirements.txt
+# =============================================================================
+
+# Google API Client Libraries
+# These handle OAuth authentication and YouTube API communication
+google-api-python-client==2.108.0
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.1.1
+
+# Image Processing (for system tray icon)
+pillow==12.0.0
+
+# System Tray Support (cross-platform, but we use Windows-specific features)
+pystray==0.19.5
+
+# HTTP Requests (for connectivity checks)
+requests==2.31.0
+
+# Windows-specific (for file permissions, shutdown handling, notifications, startup integration)
+# These are Windows-only packages that may fail on other platforms
+# If you're on Linux/Mac, you can comment these out (but some features won't work)
+pywin32==311
+win11toast==0.35  # Windows 10/11 toast notifications (actively maintained)
+winshell==0.6  # Windows startup folder integration
+
+# =============================================================================
+# Version Notes
+# =============================================================================
+# google-api-python-client 2.108.0:
+#   - Stable version with YouTube Data API v3 support
+#   - Handles video uploads and playlist management
+#
+# google-auth-oauthlib 1.1.0:
+#   - OAuth 2.0 flow for desktop applications
+#   - Browser-based authorization
+#
+# google-auth-httplib2 0.1.1:
+#   - HTTP transport adapter for Google API client
+#
+# pillow 10.1.0:
+#   - Image library for creating tray icon
+#   - Pure Python, no external dependencies on Windows
+#
+# pystray 0.19.5:
+#   - System tray icon support
+#   - Cross-platform, but we use Windows-specific features
+#
+# requests 2.31.0:
+#   - HTTP library for connectivity checks
+#   - More reliable than urllib for our use case
+#
+# pywin32 306:
+#   - Windows-specific APIs (file permissions, shutdown handling)
+#   - CRITICAL for security features (token file permissions)
+#
+# win11toast 0.35:
+#   - Windows 10/11 toast notifications (actively maintained fork)
+#   - Fixes WPARAM errors from unmaintained win10toast
+#   - Used for upload success/failure notifications
+#
+# winshell 0.6:
+#   - Windows shell integration
+#   - Used for startup folder integration (auto-start with Windows)
+#
+# =============================================================================
+# Compatibility
+# =============================================================================
+# Python Version: 3.9+
+# Operating System: Windows (primary), Linux/Mac (limited functionality)
+#
+# Windows-only features:
+# - System tray icon
+# - File permission locking (token.pickle security)
+# - Shutdown handling
+#
+# Cross-platform features:
+# - All core upload/authentication logic
+# - File operations (MD5, copy, move)
+# - State management
+#
+# =============================================================================
+# Security Notes
+# =============================================================================
+# Always keep these packages updated for security patches:
+# - google-auth-* (handles OAuth tokens)
+# - requests (handles HTTP connectivity)
+# - pillow (handles image processing, potential vulnerabilities)
+#
+# To update all packages:
+#   pip install --upgrade -r requirements.txt
+#
+# To check for outdated packages:
+#   pip list --outdated
+# =============================================================================
