@@ -219,11 +219,17 @@ App launches directly to system tray without showing the main window.
 **Perfect for**: Silent background operation without desktop clutter.
 
 ### Start with Windows
-Creates a shortcut in the Windows startup folder. App launches automatically when Windows boots.
+Creates a shortcut in the Windows startup folder and registers it with the Windows StartupApproved registry. App launches automatically when Windows boots.
 
 **Perfect for**: Truly automatic operation - computer boots, app starts, uploads begin.
 
-**Note**: Requires `pywin32` and `winshell` packages. Restart Windows for changes to take effect.
+**Note**: Requires `pywin32` and `winshell` packages. After enabling, the app will appear in Task Manager's Startup tab. Restart Windows for changes to take effect.
+
+**How it works**:
+- Creates a direct shortcut to `main.pyw` in your Windows Startup folder
+- Registers the shortcut in Windows registry (`StartupApproved\StartupFolder`)
+- Ensures the shortcut appears in Task Manager and actually runs at boot
+- Removes Zone.Identifier security flag to prevent Windows from blocking it
 
 ### Notify When Folder is Empty
 Shows a Windows toast notification when all videos have been uploaded.
@@ -418,7 +424,10 @@ For failed uploads (non-quota errors):
 ### Automation features not working
 - **Start with Windows**: Requires `pywin32` and `winshell` packages
   - Install with: `pip install pywin32 winshell`
+  - After enabling, verify the shortcut appears in Task Manager → Startup tab
+  - If not appearing: Disable and re-enable the setting to recreate the shortcut
   - Restart Windows after enabling
+  - The app registers itself in the Windows StartupApproved registry automatically
 - **Notifications**: Requires `win11toast` package
   - Install with: `pip install win11toast`
   - Only works on Windows 10/11
@@ -551,7 +560,7 @@ MIT License summary:
 
 ## Credits
 
-**Author**: GRardT
+**Author**: Gerard
 **Repository**: [GRardT/Youtube-Uploader](https://github.com/GRardT/Youtube-Uploader)
 
 Built for personal workflow automation (daily gaming clip uploads).
@@ -565,6 +574,6 @@ For issues:
 2. Check logs in GUI window
 3. Run with `python main.pyw` (not `pythonw`) to see console output
 4. Check state files for corruption
-5. Open an [issue](https://github.com/GRardT/Youtube-Uploader/issues) on GitHub
+5. Open an issue on GitHub
 
 **Remember**: All your upload history and state files are in JSON format and human-readable. You can inspect or manually edit them if needed!
