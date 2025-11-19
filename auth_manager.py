@@ -38,6 +38,49 @@ except ImportError:
     WINDOWS_SECURITY_AVAILABLE = False
 
 
+# ============================================================================
+# Utility Functions (Module-Level)
+# ============================================================================
+
+def test_youtube_api_connection(youtube_client):
+    """
+    Tests YouTube API client connection by making a lightweight test call.
+
+    This utility function is used by both AuthManager (during initialization)
+    and UploadManager (before batch uploads) to verify the connection is working
+    without duplicating code.
+
+    Args:
+        youtube_client: Authenticated YouTube API client
+
+    Returns:
+        bool: True if connection test succeeded, False otherwise
+
+    Example:
+        >>> if test_youtube_api_connection(youtube):
+        ...     print("Connection is healthy")
+    """
+    if not youtube_client:
+        return False
+
+    try:
+        # Make a lightweight API call to test connection
+        # channels().list() is fast and requires no quota units
+        request = youtube_client.channels().list(
+            part="id",
+            mine=True,
+            maxResults=1
+        )
+        response = request.execute()
+
+        # Check if we got a valid response
+        return bool(response.get('items'))
+
+    except Exception:
+        # Any exception means connection test failed
+        return False
+
+
 class AuthenticationError(Exception):
     """
     Custom exception for authentication failures.
@@ -330,26 +373,47 @@ class AuthManager:
     # -------------------------------------------------------------------------
     # YouTube Client Initialization
     # -------------------------------------------------------------------------
-    
+
+    def _test_client_connection(self):
+        """
+        Tests the YouTube API client connection to warm up the connection.
+
+        This uses the shared utility function to verify the connection is working
+        before starting uploads. If the connection is bad, it fails fast instead
+        of failing on the first upload.
+
+        Returns:
+            bool: True if connection test succeeded, False otherwise
+        """
+        self._log("Testing YouTube API connection...")
+
+        if test_youtube_api_connection(self.youtube):
+            self._log("YouTube API connection test successful")
+            return True
+        else:
+            self._log("YouTube API connection test failed")
+            return False
+
     def initialize_youtube_client(self, force_reauth=False):
         """
         Initializes the YouTube API client with authentication.
-        
+
         This handles the full authentication flow:
         1. Check for internet connectivity
         2. Load existing credentials (if any)
         3. Refresh if expired
         4. Re-authenticate if necessary
         5. Build YouTube API client
-        6. Fetch user's playlists
-        
+        6. Test client connection (warm-up)
+        7. Fetch user's playlists
+
         Args:
             force_reauth (bool): If True, forces re-authentication even if
                                 token exists. Useful for troubleshooting.
-        
+
         Raises:
             AuthenticationError: If authentication fails
-            
+
         Example:
             >>> auth = AuthManager()
             >>> auth.initialize_youtube_client()
@@ -358,10 +422,10 @@ class AuthManager:
         # Step 1: Ensure internet is available
         if not self.wait_for_internet():
             raise AuthenticationError("No internet connection available")
-        
+
         # Step 2: Get valid credentials
         creds = None
-        
+
         if not force_reauth:
             # Try to load existing credentials
             try:
@@ -369,7 +433,7 @@ class AuthManager:
             except AuthenticationError:
                 # Token was corrupted, need to re-authenticate
                 creds = None
-        
+
         # Step 3: Check if credentials are valid
         if creds:
             if creds.expired and creds.refresh_token:
@@ -382,14 +446,14 @@ class AuthManager:
             elif not creds.valid:
                 # Token is invalid for some other reason
                 creds = None
-        
+
         # Step 4: If still no valid credentials, run OAuth flow
         if not creds:
             creds = self._run_oauth_flow()
-        
+
         # Step 5: Save credentials for future use
         self._save_credentials(creds)
-        
+
         # Step 6: Build YouTube API client
         try:
             self.youtube = build(
@@ -398,13 +462,70 @@ class AuthManager:
                 credentials=creds
             )
             self._log(config.SUCCESS_AUTH)
-            
+
         except Exception as e:
             raise AuthenticationError(f"Failed to build YouTube client: {str(e)}")
-        
-        # Step 7: Fetch user's playlists
+
+        # Step 7: Test client connection (warm-up)
+        if not self._test_client_connection():
+            raise AuthenticationError("Failed to establish connection to YouTube API")
+
+        # Step 8: Fetch user's playlists
         self.fetch_playlists()
     
+    def refresh_youtube_client(self):
+        """
+        Refreshes the YouTube API client without requiring re-authentication.
+
+        This is used periodically to prevent stale connections (e.g., after VPN IP changes).
+        It reuses existing credentials and just rebuilds the client and re-fetches playlists.
+
+        This is lighter-weight than full re-authentication because:
+        - We reuse the existing valid credentials (no OAuth flow)
+        - We just rebuild the API client object
+        - We re-fetch playlists in case anything changed
+
+        Returns:
+            bool: True if refresh succeeded, False if refresh failed
+
+        Raises:
+            AuthenticationError: If client build fails
+        """
+        try:
+            # Load existing credentials (should be valid from initialization)
+            creds = self._load_credentials()
+
+            if not creds:
+                self._log("Warning: No credentials available for refresh")
+                return False
+
+            # Rebuild the YouTube API client with same credentials
+            try:
+                self.youtube = build(
+                    config.YOUTUBE_API_SERVICE_NAME,
+                    config.YOUTUBE_API_VERSION,
+                    credentials=creds
+                )
+            except Exception as e:
+                raise AuthenticationError(f"Failed to rebuild YouTube client: {str(e)}")
+
+            # Test the new client connection
+            if not self._test_client_connection():
+                raise AuthenticationError("New client connection test failed")
+
+            # Re-fetch playlists in case they changed
+            self.fetch_playlists()
+
+            self._log("YouTube API client refresh completed successfully")
+            return True
+
+        except AuthenticationError as e:
+            self._log(f"Failed to refresh YouTube client: {str(e)}")
+            return False
+        except Exception as e:
+            self._log(f"Unexpected error refreshing YouTube client: {str(e)}")
+            return False
+
     # -------------------------------------------------------------------------
     # Playlist Operations
     # -------------------------------------------------------------------------

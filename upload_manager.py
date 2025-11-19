@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
 import config
+from auth_manager import test_youtube_api_connection
 
 
 class UploadError(Exception):
@@ -69,7 +70,7 @@ class UploadManager:
     def __init__(self, youtube_client, file_handler, state_manager, logger=None):
         """
         Initialize the UploadManager.
-        
+
         Args:
             youtube_client: Authenticated YouTube API client (from AuthManager)
             file_handler: FileHandler instance
@@ -80,7 +81,7 @@ class UploadManager:
         self.file_handler = file_handler
         self.state_manager = state_manager
         self.logger = logger
-        
+
         # Default settings (can be changed via setters)
         self.privacy_status = config.DEFAULT_PRIVACY_SETTING
         self.selected_playlist_id = None
@@ -88,16 +89,104 @@ class UploadManager:
 
         # Session statistics
         self.session_upload_count = 0
+
+        # Client health tracking (uses config constants for maintainability)
+        self.client_created_time = datetime.now()
+        self.uploads_since_refresh = 0
     
     def _log(self, message):
         """
         Internal logging helper.
-        
+
         Args:
             message (str): Message to log
         """
         if self.logger:
             self.logger(message)
+
+    def _is_transient_network_error(self, error):
+        """
+        Detects if an error is a transient network issue requiring immediate retry.
+
+        Transient errors are temporary network problems (not server issues):
+        - WinError 10053: Connection reset by peer (common with VPN IP changes)
+        - Connection timeouts
+        - Broken pipe
+        - Connection refused / aborted
+        - Network unreachable
+
+        These should be retried immediately with a short delay, not exponential backoff,
+        because they indicate a temporary network state change that recovers quickly.
+
+        Args:
+            error: Exception to check
+
+        Returns:
+            bool: True if error appears to be transient network-related
+        """
+        # Convert error to lowercase strings for case-insensitive matching
+        error_str = str(error).lower()
+        error_repr = repr(error).lower()
+
+        # List of indicators for transient network errors
+        # Each string is checked against both str() and repr() representations
+        transient_indicators = [
+            'winerror 10053',           # Windows: Connection reset by peer
+            'connection reset',          # Generic: Connection reset
+            'broken pipe',               # Generic: Broken pipe
+            'connection aborted',        # Generic: Connection aborted
+            'connection refused',        # Generic: Connection refused
+            'econnreset',                # Unix: Connection reset
+            'econnaborted',              # Unix: Connection aborted
+            'epipe',                     # Unix: Broken pipe
+            'timeout',                   # Generic: Timeout
+            'temporarily unavailable',   # Generic: Temporary issue
+            'network unreachable',       # Generic: Network unreachable
+        ]
+
+        # Check if any indicator is found in the error message
+        for indicator in transient_indicators:
+            if indicator in error_str or indicator in error_repr:
+                return True
+
+        return False
+
+    def _client_needs_refresh(self):
+        """
+        Checks if the YouTube API client should be refreshed due to age or usage.
+
+        Refresh is triggered by:
+        - Client age exceeding config.CLIENT_REFRESH_INTERVAL_SECONDS (default 30 minutes)
+        - Upload count exceeding config.CLIENT_REFRESH_UPLOAD_INTERVAL (default 50 uploads)
+
+        Returns:
+            bool: True if client should be refreshed
+        """
+        # Check if client has exceeded time limit
+        client_age = (datetime.now() - self.client_created_time).total_seconds()
+        if client_age > config.CLIENT_REFRESH_INTERVAL_SECONDS:
+            return True
+
+        # Check if client has exceeded upload limit
+        if self.uploads_since_refresh >= config.CLIENT_REFRESH_UPLOAD_INTERVAL:
+            return True
+
+        return False
+
+    def set_youtube_client(self, youtube_client):
+        """
+        Updates the YouTube API client and resets health tracking.
+
+        This is called when the auth manager has created a fresh client,
+        typically during periodic refresh or after a network issue.
+
+        Args:
+            youtube_client: New authenticated YouTube API client
+        """
+        self.youtube = youtube_client
+        self.client_created_time = datetime.now()
+        self.uploads_since_refresh = 0
+        self._log("YouTube API client refreshed")
     
     # -------------------------------------------------------------------------
     # Settings Management
@@ -414,13 +503,20 @@ class UploadManager:
 
             # Step 13: Update session statistics
             self.session_upload_count += 1
-            
+            self.uploads_since_refresh += 1
+
+            # Step 14: Check if client needs refresh
+            if self._client_needs_refresh():
+                self._log("YouTube API client refresh needed (age or usage limit reached)")
+                # The GUI will need to handle this and call set_youtube_client() with a new client
+                # For now, just log it - GUI can periodically check this condition
+
             success_msg = config.SUCCESS_UPLOAD.format(
                 filename=filename,
                 count=self.session_upload_count
             )
             self._log(success_msg)
-            
+
             return True, success_msg, video_id
             
         except QuotaExceededError:
@@ -434,12 +530,23 @@ class UploadManager:
             retry_count = self.state_manager.get_retry_count(filepath)
             retry_count += 1
 
-            if retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
-                # Calculate next retry time using exponential backoff
+            # Check if this is a transient network error (e.g., VPN IP change)
+            is_transient = self._is_transient_network_error(e)
+
+            if is_transient:
+                # For transient errors, use a short delay before immediate retry
+                # VPN IP changes are temporary, so rapid retry is appropriate
+                delay = config.TRANSIENT_NETWORK_ERROR_RETRY_DELAY_SECONDS
+                delay_msg = f"{delay} second(s)"
+            else:
+                # For other errors, use exponential backoff
                 delay = min(
                     config.INITIAL_RETRY_DELAY_SECONDS * (2 ** (retry_count - 1)),
                     config.MAX_RETRY_DELAY_SECONDS
                 )
+                delay_msg = f"{delay // 60} minute(s)"
+
+            if retry_count < config.MAX_UPLOAD_RETRY_ATTEMPTS:
                 next_retry = datetime.now() + timedelta(seconds=delay)
 
                 # Mark as failed with retry information
@@ -450,9 +557,10 @@ class UploadManager:
                     next_retry_time=next_retry.isoformat()
                 )
 
-                error_msg = (f"Upload failed for {filename}: {str(e)}. "
+                error_type = "transient network error" if is_transient else "error"
+                error_msg = (f"Upload failed for {filename}: {str(e)} ({error_type}). "
                            f"Will retry (attempt {retry_count + 1}/{config.MAX_UPLOAD_RETRY_ATTEMPTS}) "
-                           f"in {delay // 60} minute(s).")
+                           f"in {delay_msg}.")
                 self._log(error_msg)
             else:
                 # Max retries exceeded - mark as permanently failed
@@ -830,21 +938,46 @@ class UploadManager:
             return False, error_msg, 0
     
     # -------------------------------------------------------------------------
+    # Connection Health Management
+    # -------------------------------------------------------------------------
+
+    def warmup_connection(self):
+        """
+        Warms up the YouTube API connection before batch uploads.
+
+        This uses the shared test_youtube_api_connection() utility to verify
+        the connection is working before starting a batch upload. If the
+        connection is bad, it fails fast and the user can address the issue
+        (e.g., VPN reconnect) rather than failing on the first video upload.
+
+        Returns:
+            bool: True if connection warmup succeeded, False otherwise
+        """
+        self._log("Testing YouTube API connection before batch upload...")
+
+        if test_youtube_api_connection(self.youtube):
+            self._log("YouTube API connection healthy")
+            return True
+        else:
+            self._log("YouTube API connection test failed - uploads will retry on first failure")
+            return False
+
+    # -------------------------------------------------------------------------
     # Batch Upload Operations
     # -------------------------------------------------------------------------
-    
+
     def upload_files_from_folder(self, folder_path, progress_callback=None, should_stop_callback=None):
         """
         Uploads all video files from a folder sequentially.
-        
+
         This processes files one at a time (not parallel) for stability.
         If quota is exceeded mid-batch, remaining files are skipped.
-        
+
         Args:
             folder_path (str): Path to folder containing video files
             progress_callback (callable, optional): Function(current, total, percent)
             should_stop_callback (callable, optional): Function() -> bool to check if should stop
-            
+
         Returns:
             dict: Statistics about the upload batch
                   {success_count, fail_count, skip_count, total_files}
@@ -856,16 +989,21 @@ class UploadManager:
             'total_files': 0,
             'quota_exceeded': False
         }
-        
+
         try:
             # Get all video files in folder
             video_files = self.file_handler.get_video_files(folder_path)
             results['total_files'] = len(video_files)
-            
+
             if not video_files:
                 self._log(config.INFO_NO_VIDEOS_FOUND)
                 return results
-            
+
+            # Warmup connection before starting batch upload
+            # This catches network issues early (e.g., VPN issues) before the first upload fails
+            if not self.warmup_connection():
+                self._log("Warning: YouTube API connection test failed. First upload may fail, but will retry automatically.")
+
             self._log(f"Found {len(video_files)} video(s) to upload")
             
             # Process each file

@@ -241,6 +241,25 @@ CONNECTIVITY_CHECK_URLS = [
 # Timeout for each connectivity check request (in seconds)
 CONNECTIVITY_CHECK_TIMEOUT = 5
 
+# Maximum time a YouTube API client should be used before refresh (in seconds)
+# Refreshing the client periodically helps prevent stale connections (e.g., VPN IP changes)
+# 1800 seconds = 30 minutes (good balance between refresh frequency and performance)
+CLIENT_REFRESH_INTERVAL_SECONDS = 1800
+
+# Maximum number of uploads before refreshing the YouTube API client
+# Refreshing after many uploads helps prevent memory leaks and connection staleness
+# This triggers BEFORE the time-based refresh if uploads happen frequently
+CLIENT_REFRESH_UPLOAD_INTERVAL = 50
+
+# Retry delay for transient network errors in seconds
+# Used for errors like WinError 10053 (connection reset by VPN IP change)
+# These are temporary issues that recover quickly, so we retry fast instead of exponential backoff
+TRANSIENT_NETWORK_ERROR_RETRY_DELAY_SECONDS = 5
+
+# Timeout for YouTube API connection test call (in seconds)
+# This is used to warm up the connection and catch network issues early
+YOUTUBE_API_TEST_TIMEOUT = 10
+
 # -----------------------------------------------------------------------------
 # GUI Configuration
 # -----------------------------------------------------------------------------

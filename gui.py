@@ -1314,6 +1314,24 @@ class YouTubeUploaderGUI:
         Sends notifications based on user preferences.
         """
         try:
+            # Check if YouTube client needs refresh (due to age or usage)
+            # This helps prevent connection issues with VPN or stale connections
+            if self.upload_manager._client_needs_refresh():
+                self.log("Refreshing YouTube API client (periodic maintenance)...")
+                try:
+                    # Use AuthManager's refresh method (cleaner than full re-init)
+                    # This reuses existing credentials and rebuilds the client
+                    if self.auth_manager.refresh_youtube_client():
+                        # Update upload_manager with the refreshed client
+                        self.upload_manager.set_youtube_client(self.auth_manager.youtube)
+                        self.log("YouTube API client refreshed successfully")
+                    else:
+                        self.log("Warning: YouTube API client refresh failed")
+                        self.log("Continuing with existing connection...")
+                except Exception as e:
+                    self.log(f"Warning: Could not refresh YouTube API client: {str(e)}")
+                    self.log("Continuing with existing connection...")
+
             # Get video files from watch folder
             video_files = self.file_handler.get_video_files(self.watch_folder)
 
